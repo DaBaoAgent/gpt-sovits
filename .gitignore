@@ -1,0 +1,9 @@
+# Python 缓存
+__pycache__/
+*.pyc
+.cache/
+
+# 运行日志
+tts_server*.log
+*.log
+*.zip
