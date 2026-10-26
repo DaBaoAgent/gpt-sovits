@@ -44,7 +44,7 @@ A/B 试听 + 回读。CPU 上单段 4 步推理约 12 秒（不含首次模型�
 ## 安装（另一台 Windows 电脑）
 
 1. 安装 Python 3.11（64 位）。
-2. 拉取 LFS 权重（仓库 LFS 合计约 2.9 GB）：
+2. 拉取 LFS 权重（仓库 LFS 合计约 3.1 GB）：
    ```powershell
    git lfs install
    git lfs pull
