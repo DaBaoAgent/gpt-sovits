@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """diyi：第一人称历史人物口播稿 → 配音 一键管线。
 
-用法（cmd）：
-    D:\GPT-SoVITS\diyi.cmd --script 口播稿.md --out 配音.wav [--voice dabao-zhugeliang] [--speed 0.82]
+用法（在本引擎目录运行）：
+    .\diyi.cmd --script 口播稿.md --out 配音.wav [--voice dabao-zhugeliang] [--speed 0.82]
 
 流程：
     1. 读取口播稿（.md / .txt，UTF-8）
@@ -26,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent  # D:\GPT-SoVITS
+ROOT = Path(__file__).resolve().parent.parent  # 引擎根目录
 DABAO_TTS = ROOT / "dabao_tts.py"
 VOICES = ROOT / "voices"
 DEFAULT_VOICE = "dabao-zhugeliang"
@@ -91,9 +91,6 @@ def main() -> None:
     parser.add_argument("--voice", "-v", default=DEFAULT_VOICE, help=f"音色预设 id（默认 {DEFAULT_VOICE}）")
     parser.add_argument("--fixes", type=Path, help="补充读音修正文件（每行 原文\\t替换）")
     parser.add_argument("--speed", type=float, help="覆盖语速（默认取 preset）")
-    parser.add_argument("--temperature", type=float, help="覆盖采样温度")
-    parser.add_argument("--top-p", type=float, help="覆盖 top_p")
-    parser.add_argument("--top-k", type=int, help="覆盖 top_k")
     parser.add_argument("--seed", type=int, help="固定随机种子")
     parser.add_argument("--act", type=int, help="套用 preset 的按幕读音修正")
     parser.add_argument("--force", action="store_true", help="忽略缓存重配")
@@ -132,12 +129,6 @@ def main() -> None:
     ]
     if args.speed is not None:
         cmd += ["--speed", str(args.speed)]
-    if args.temperature is not None:
-        cmd += ["--temperature", str(args.temperature)]
-    if args.top_p is not None:
-        cmd += ["--top-p", str(args.top_p)]
-    if args.top_k is not None:
-        cmd += ["--top-k", str(args.top_k)]
     if args.seed is not None:
         cmd += ["--seed", str(args.seed)]
     if args.act is not None:

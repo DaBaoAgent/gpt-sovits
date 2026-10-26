@@ -27,6 +27,11 @@ A Powerful Few-shot Voice Conversion and Text-to-Speech WebUI.<br><br>
 
 ---
 
+> **PeiYin 配音引擎分支**：本仓库同时作为 PeiYin 项目的配音引擎（放在其根目录
+> `GPT-SoVITS/`，git submodule）。一键调用与参数见 `DABAO.md`，音色预设与读音
+> 修正在 `voices/`；部署步骤见 PeiYin 项目的 `README.md` 与 `scripts/setup.ps1`。
+> 以下为上游 GPT-SoVITS WebUI 说明。
+
 ## Features:
 
 1. **Zero-shot TTS:** Input a 5-second vocal sample and experience instant text-to-speech conversion.

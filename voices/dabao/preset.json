@@ -3,16 +3,16 @@
     "id": "dabao",
     "label": "dabao (GPT-SoVITS v5turbo zero-shot)",
     "model": "gpt-sovits-v5turbo",
-    "ref_audio_path": "D:\\GPT-SoVITS\\voices\\dabao\\ref_dabao3-1.wav",
+    "ref_audio_path": "voices/dabao/ref_dabao3-1.wav",
     "prompt_text": "希特勒在巴伐利亚、阿尔卑斯山的乡间别墅策划了他最大胆的行动，准备迎接最大挑战。罗马尼亚、保加利亚和匈牙利是德国的坚定盟友。",
     "prompt_lang": "zh",
     "text_lang": "zh"
   },
   "server": {
-    "root": "D:\\GPT-SoVITS",
-    "python": "D:\\GPT-SoVITS\\.venv\\Scripts\\python.exe",
-    "api_script": "D:\\GPT-SoVITS\\api_v2.py",
-    "infer_config": "D:\\GPT-SoVITS\\GPT_SoVITS\\configs\\tts_infer.yaml",
+    "root": ".",
+    "python": ".venv/Scripts/python.exe",
+    "api_script": "tts_server.py",
+    "infer_config": "GPT_SoVITS/configs/tts_infer.yaml",
     "host": "127.0.0.1",
     "port": 9880,
     "start_timeout_seconds": 180
@@ -43,8 +43,8 @@
     "gap_ms": 20,
     "mp3_bitrate": "192k"
   },
-  "ffmpeg": "ffmpeg",
-  "ffprobe": "ffprobe",
+  "ffmpeg": "runtime/ffmpeg.exe",
+  "ffprobe": "runtime/ffprobe.exe",
   "speak_fixes": {
     "global": [
       [

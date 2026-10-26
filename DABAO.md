@@ -1,9 +1,15 @@
 # dabao 配音预设
 
-固定音色与参数在 `voices\dabao\`，一键入口：
+固定音色与参数在 `voices\dabao\`，在本引擎目录（`GPT-SoVITS\`）下运行一键入口：
 
 ```powershell
-D:\GPT-SoVITS\dabao_tts.cmd --text-file .\口播稿.txt --out .\out\narration.mp3
+.\dabao_tts.cmd --text-file .\口播稿.txt --out .\out\narration.mp3
+```
+
+从其他项目目录调用时，用引擎所在的绝对路径即可：
+
+```powershell
+D:\@kaifa\PeiYin\GPT-SoVITS\dabao_tts.cmd --text-file .\口播稿.txt --out .\out\narration.mp3
 ```
 
 - 参数与读音规则：`voices\dabao\preset.json`

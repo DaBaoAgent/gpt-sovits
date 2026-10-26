@@ -1,14 +1,18 @@
-"""dabao 配音：本机 GPT-SoVITS v5turbo 零样本克隆（tushuo 26E 参考音色）。
+"""dabao 配音：GPT-SoVITS v5turbo 零样本克隆（tts_server.py HTTP 服务版）。
 
-参数来源：DaBaoAgent/tushuo 的 tools/narrate.py 与 tools/production-defaults.json；音色与参数定稿为 dabao 预设（2026-10-20）。
-原项目走 OpenAI 兼容的本地 tts_server；这里改用 D:\\GPT-SoVITS 原生 api_v2 的
-POST /tts（ref_audio_path + prompt_text），其余流程保持一致：
+- 服务端由 tts_server.py 提供（POST /tts，OpenAI 兼容形状）
+- 参考音频、采样参数、发音修正全部由服务端从 preset.json 读取
+- 客户端只传 text / speed_factor / text_split_method / act
+- 响应是 MP3，本脚本用 ffmpeg 解码后做后处理（切段校验、静音压缩、噪声门、拼接）
 
-- 按句切成 <= 78 字的段，cut1 切分，speed 1.0
-- 每段时长校验：超过 6.2 字/秒视为尾句截断，丢弃重配（最多 3 次）
-- 44.1 kHz 单声道；句间静音 > 150 ms 压到 100 ms；-40 dB 静音门限
-- -33 dB 轻噪声门，门限以下保留 0.3 增益；段间补 20 ms
+流程：
+- 按句切成 <= max_chunk_chars 字的段，cut1 切分，speed 1.0
+- 每段时长校验：超过 max_chars_per_second 字/秒视为尾句截断，丢弃重配（最多 retries 次）
+- 44.1 kHz 单声道；句间静音 > min_gap_ms 压到 keep_gap_ms；gate_db 静音门限
+- gate_db 轻噪声门，门限以下保留 gate_floor 增益；段间补 gap_ms
 - 输出 mp3 192 kbps，并写同名 .json 记录分段与时长
+
+所有相对路径都基于本文件所在目录（引擎根目录）解析，克隆到任何位置都能直接运行。
 """
 
 from __future__ import annotations
@@ -35,6 +39,20 @@ def load_config(path: Path) -> dict:
     if not path.exists():
         raise SystemExit(f"找不到配音配置：{path}")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def resolve_path(p: str | os.PathLike) -> Path:
+    """相对路径基于 ROOT 解析，绝对路径原样返回。"""
+    pp = Path(p)
+    return pp if pp.is_absolute() else (ROOT / pp)
+
+
+def resolve_tool(p: str | os.PathLike, name: str) -> str:
+    """配置里的相对路径存在就用它，否则回退到 PATH 上的同名命令。"""
+    candidate = resolve_path(p)
+    if candidate.exists():
+        return str(candidate)
+    return name
 
 
 def apply_speak_fixes(text: str, fixes: list[list[str]]) -> str:
@@ -161,48 +179,58 @@ def soft_gate(x: np.ndarray, sr: int, post: dict) -> np.ndarray:
     return (x * gi).astype(np.float32)
 
 
-def server_ready(session: requests.Session, base_url: str) -> bool:
-    for path in ("/docs", "/tts"):
-        try:
-            response = session.get(base_url + path, timeout=2)
-        except requests.RequestException:
-            continue
-        if response.status_code in (200, 405, 422):
-            return True
-    return False
+def server_health(session: requests.Session, base_url: str) -> dict | None:
+    try:
+        response = session.get(base_url + "/health", timeout=2)
+        if response.status_code == 200:
+            return response.json()
+    except (requests.RequestException, ValueError):
+        pass
+    return None
 
 
 def ensure_server(cfg: dict, base_url: str, env: dict) -> subprocess.Popen | None:
     session = env["session"]
-    if server_ready(session, base_url):
+    health = server_health(session, base_url)
+    if health is not None:
+        expect = env.get("voice_id")
+        got = health.get("voice")
+        if expect and got and got != expect:
+            raise SystemExit(
+                f"{base_url} 上已有 tts_server 在跑音色 {got}，"
+                f"与当前配置 {expect} 不一致；请先停掉该服务再试。"
+            )
         return None
 
     server = cfg["server"]
-    root = Path(server["root"])
-    python = Path(server["python"])
-    api = Path(server["api_script"])
+    root = resolve_path(server["root"])
+    python = resolve_path(server["python"])
+    api = resolve_path(server["api_script"])
     if not python.exists() or not api.exists():
         raise SystemExit(f"GPT-SoVITS 目录不完整：{root}（需要 {python} 与 {api}）")
 
     log_path = ROOT / "logs" / "dabao_tts_server.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [str(python), str(api), "-a", server["host"], "-p", str(server["port"])]
-    infer_cfg = server.get("infer_config")
-    if infer_cfg:
-        cmd += ["-c", str(infer_cfg)]
+    port = cfg["server"]["port"]
+    cmd = [str(python), str(api), str(port)]
+    popen_env = os.environ.copy()
+    popen_env["PYTHONUTF8"] = "1"
+    if env.get("preset"):
+        popen_env["TTS_PRESET"] = env["preset"]
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     log = open(log_path, "ab")
     process = subprocess.Popen(
-        cmd, cwd=str(root), creationflags=creationflags,
+        cmd, cwd=str(root), env=popen_env,
+        creationflags=creationflags,
         stdout=log, stderr=log,
     )
     env["log"] = log
-    print(f"启动 GPT-SoVITS 服务（首次加载约 1 分钟，日志 {log_path}）", flush=True)
+    print(f"启动 GPT-SoVITS tts_server（首次加载约 1 分钟，日志 {log_path}）", flush=True)
     deadline = time.time() + int(server.get("start_timeout_seconds", 180))
     while time.time() < deadline:
         if process.poll() is not None:
             raise SystemExit(f"GPT-SoVITS 服务提前退出，状态码 {process.returncode}；见 {log_path}")
-        if server_ready(session, base_url):
+        if server_health(session, base_url) is not None:
             return process
         time.sleep(2)
     process.terminate()
@@ -215,7 +243,7 @@ def main() -> None:
     except AttributeError:
         pass
 
-    parser = argparse.ArgumentParser(description="dabao 配音（本机 GPT-SoVITS v5turbo 零样本，参数已定稿）")
+    parser = argparse.ArgumentParser(description="dabao 配音（GPT-SoVITS v5turbo 零样本，参数已定稿）")
     parser.add_argument("--text", "-t", help="直接给口播文本")
     parser.add_argument("--text-file", "-f", type=Path, help="口播稿文件（UTF-8）")
     parser.add_argument("--out", "-o", type=Path, default=ROOT / "narration.mp3",
@@ -224,12 +252,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, help="覆盖配置里的服务端口")
     parser.add_argument("--force", action="store_true", help="忽略缓存重新合成")
     parser.add_argument("--act", type=int, help="按幕号套用配置里的 acts 读音修正")
-    parser.add_argument("--temperature", type=float, help="覆盖采样温度")
-    parser.add_argument("--top-p", type=float, help="覆盖 top_p")
-    parser.add_argument("--top-k", type=int, help="覆盖 top_k")
     parser.add_argument("--speed", type=float, help="覆盖语速")
-    parser.add_argument("--seed", type=int, help="固定随机种子")
-    parser.add_argument("--ref-audio", type=Path, help="临时换参考音频（逐字稿仍用配置/sidecar）")
+    parser.add_argument("--seed", type=int, help="固定随机种子（服务端默认随机）")
     parser.add_argument("--keep-gap-ms", type=int, help="覆盖保留的句间静音毫秒")
     parser.add_argument("--min-gap-ms", type=int, help="覆盖判定为可压缩静音的毫秒")
     parser.add_argument("--keep-server", action="store_true", help="结束后保留服务进程")
@@ -249,65 +273,28 @@ def main() -> None:
     cfg = load_config(args.config)
     if args.port:
         cfg["server"]["port"] = args.port
-    if args.ref_audio:
-        cfg["voice"]["ref_audio_path"] = str(args.ref_audio.resolve())
-    if args.temperature is not None:
-        cfg["synthesis"]["temperature"] = args.temperature
-    if args.top_p is not None:
-        cfg["synthesis"]["top_p"] = args.top_p
-    if args.top_k is not None:
-        cfg["synthesis"]["top_k"] = args.top_k
     if args.speed is not None:
         cfg["synthesis"]["speed_factor"] = args.speed
-    if args.seed is not None:
-        cfg["synthesis"]["seed"] = args.seed
     if args.keep_gap_ms is not None:
         cfg["postprocess"]["keep_gap_ms"] = args.keep_gap_ms
     if args.min_gap_ms is not None:
         cfg["postprocess"]["min_gap_ms"] = args.min_gap_ms
 
-    voice = cfg["voice"]
     synth = cfg["synthesis"]
     post = cfg["postprocess"]
     if not 0 < post["keep_gap_ms"] < post["min_gap_ms"]:
         raise SystemExit("keep_gap_ms 必须大于 0 且小于 min_gap_ms")
     sr = int(post["sample_rate"])
-    text_lang = voice["text_lang"]
-    prompt_lang = voice["prompt_lang"]
-    ref_path = Path(voice["ref_audio_path"])
-    prompt_text = (voice.get("prompt_text") or "").strip()
-    if args.ref_audio:
-        sidecar = ref_path.with_suffix(".txt")
-        if sidecar.exists():
-            prompt_text = sidecar.read_text(encoding="utf-8-sig").strip()
-        else:
-            print("警告：--ref-audio 没有同名 .txt，仍使用 preset.prompt_text；请确认逐字一致。")
-    if not prompt_text:
-        sidecar = ref_path.with_suffix(".txt")
-        if sidecar.exists():
-            prompt_text = sidecar.read_text(encoding="utf-8-sig").strip()
-    if not ref_path.exists():
-        raise SystemExit(
-            f"缺少 dabao 参考音频：{ref_path}\n"
-            "检查 D:/GPT-SoVITS/voices/dabao/preset.json 的 voice.ref_audio_path。"
-        )
-    if not prompt_text:
-        raise SystemExit(
-            f"缺少参考音频逐字文本：在配置里填 voice.prompt_text，"
-            f"或在 {ref_path.with_suffix('.txt')} 写一份与参考音频逐字一致的中文文本。"
-        )
 
-    ffmpeg = cfg.get("ffmpeg", "ffmpeg")
-    ffprobe = cfg.get("ffprobe", "ffprobe")
+    ffmpeg = resolve_tool(cfg.get("ffmpeg", "ffmpeg"), "ffmpeg")
+    ffprobe = resolve_tool(cfg.get("ffprobe", "ffprobe"), "ffprobe")
     speak_fixes = cfg.get("speak_fixes") or {}
     fixes = list(speak_fixes.get("global", []))
     if args.act is not None:
         fixes.extend(speak_fixes.get("acts", {}).get(str(args.act), []))
 
     voice_fp = {
-        "ref": str(ref_path), "ref_mtime": ref_path.stat().st_mtime,
-        "prompt": prompt_text, "sampling": synth, "voice": voice, "post": post,
-        "fixes": fixes,
+        "sampling": synth, "post": post, "fixes": fixes,
     }
     config_hash = hashlib.sha256(
         json.dumps(voice_fp, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -331,7 +318,11 @@ def main() -> None:
     session = requests.Session()
     session.trust_env = False
     base_url = f"http://{cfg['server']['host']}:{cfg['server']['port']}"
-    env = {"session": session}
+    env = {
+        "session": session,
+        "preset": str(args.config.resolve()),
+        "voice_id": (cfg.get("voice") or {}).get("id"),
+    }
     process = None
     missing = [part for _, _, _, part in parts if not part.exists()]
     if missing:
@@ -344,31 +335,24 @@ def main() -> None:
                 for attempt in range(int(synth["retries"])):
                     payload = {
                         "text": spoken,
-                        "text_lang": text_lang,
-                        "ref_audio_path": str(ref_path.resolve()),
-                        "prompt_text": prompt_text,
-                        "prompt_lang": prompt_lang,
-                        "top_k": synth["top_k"],
-                        "top_p": synth["top_p"],
-                        "temperature": synth["temperature"],
-                        "text_split_method": synth["text_split_method"],
-                        "batch_size": synth["batch_size"],
                         "speed_factor": synth["speed_factor"],
-                        "fragment_interval": synth["fragment_interval"],
-                        "seed": synth["seed"],
-                        "repetition_penalty": synth.get("repetition_penalty", 1.35),
-                        "media_type": "wav",
-                        "streaming_mode": False,
+                        "text_split_method": synth["text_split_method"],
                     }
+                    if args.act is not None:
+                        payload["act"] = args.act
+                    if args.seed is not None:
+                        payload["seed"] = args.seed
                     response = session.post(base_url + "/tts", json=payload, timeout=(10, 1800))
                     response.raise_for_status()
-                    if len(response.content) < 1000 or response.content[:4] != b"RIFF":
-                        raise RuntimeError(f"第 {index} 段未返回有效 WAV：{response.headers.get('Content-Type')}")
-                    tmp = part.with_suffix(".tmp.wav")
+                    # tts_server.py 返回 MP3（audio/mpeg），写入临时文件后用 ffmpeg 校验时长
+                    if len(response.content) < 1000:
+                        raise RuntimeError(f"第 {index} 段返回内容过短：{len(response.content)} bytes")
+                    tmp = part.with_suffix(".tmp.mp3")
                     tmp.write_bytes(response.content)
                     seconds = probe_seconds(tmp, ffprobe)
                     if seconds > 0 and clean_chars / seconds <= synth["max_chars_per_second"]:
-                        tmp.replace(part)
+                        tmp.replace(part.with_suffix(".mp3"))
+                        part.write_bytes(b"")
                         break
                     tmp.unlink(missing_ok=True)
                     print(f"第 {index} 段疑似截断（{clean_chars} 字 / {seconds:.2f}s），"
@@ -393,7 +377,9 @@ def main() -> None:
     timeline = 0.0
     gap = np.zeros(int(sr * post["gap_ms"] / 1000), np.float32)
     for index, original, spoken, part in parts:
-        raw = decode(part, ffmpeg, sr)
+        # tts_server.py 返回 MP3，实际文件是 .mp3
+        mp3_file = part.with_suffix(".mp3")
+        raw = decode(mp3_file, ffmpeg, sr)
         tight = tighten(raw, sr, post)
         tight_path = part.with_suffix(".tight.wav")
         write_wav(tight, tight_path, ffmpeg, sr)
@@ -401,7 +387,7 @@ def main() -> None:
         chunks_meta.append({
             "index": index, "text": original, "spoken": spoken, "file": str(tight_path),
             "start": round(timeline, 4), "duration": round(tight_duration, 4),
-            "raw_duration": round(len(raw) / sr, 4), "raw_file": str(part),
+            "raw_duration": round(len(raw) / sr, 4), "raw_file": str(mp3_file),
         })
         pieces.append(tight)
         timeline += tight_duration
@@ -428,17 +414,17 @@ def main() -> None:
     metadata_path.write_text(json.dumps({
         "fingerprint": config_hash,
         "preset": cfg.get("preset", ""),
-        "voice_id": voice.get("id", ""),
-        "voice": voice.get("label", voice.get("id", "")),
+        "voice_id": cfg.get("voice", {}).get("id", ""),
+        "voice": cfg.get("voice", {}).get("label", cfg.get("voice", {}).get("id", "")),
         "model": synth.get("model", "gpt-sovits-v5turbo"),
         "split": synth["text_split_method"],
         "speed": synth["speed_factor"],
         "sampling": {
-            "temperature": synth["temperature"],
-            "top_p": synth["top_p"],
-            "top_k": synth["top_k"],
-            "seed": synth["seed"],
-            "repetition_penalty": synth.get("repetition_penalty", 1.35),
+            "temperature": synth.get("temperature"),
+            "top_p": synth.get("top_p"),
+            "top_k": synth.get("top_k"),
+            "seed": synth.get("seed"),
+            "repetition_penalty": synth.get("repetition_penalty", 1.3),
         },
         "duration": duration,
         "speakFixes": fixes,

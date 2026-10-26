@@ -24,7 +24,8 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "GPT_SoVITS"))
 os.environ.setdefault("G2PW", "0")
 
-PRESET_PATH = os.path.join(ROOT, "voices", "dabao", "preset.json")
+_preset = os.environ.get("TTS_PRESET") or os.path.join("voices", "dabao", "preset.json")
+PRESET_PATH = _preset if os.path.isabs(_preset) else os.path.join(ROOT, _preset)
 with open(PRESET_PATH, encoding="utf-8") as f:
     PRESET = json.load(f)
 
@@ -144,7 +145,7 @@ def get_tts():
     return _tts
 
 
-def synth(text, speed=None, split=None, act=None):
+def synth(text, speed=None, split=None, act=None, seed=None):
     fixes = list(GLOBAL_FIXES)
     if act is not None:
         fixes.extend(ACT_FIXES.get(str(act), []))
@@ -164,6 +165,8 @@ def synth(text, speed=None, split=None, act=None):
     }
     if speed:
         req["speed_factor"] = float(speed)
+    if seed is not None:
+        req["seed"] = int(seed)
     sr, pcm = None, None
     with _lock:
         for item in tts.run(req):
@@ -227,10 +230,11 @@ class Handler(BaseHTTPRequestHandler):
         speed = body.get("speed") or body.get("speed_factor")
         split = body.get("text_split_method")
         act = body.get("act")
+        seed = body.get("seed")
 
         t0 = time.time()
         try:
-            sr, pcm, spoken = synth(text, speed, split, act)
+            sr, pcm, spoken = synth(text, speed, split, act, seed)
             mp3 = to_mp3(pcm, sr)
         except Exception as e:
             log("合成失败: %s\n%s" % (e, traceback.format_exc()))
