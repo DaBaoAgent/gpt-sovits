@@ -1,14 +1,14 @@
 # dabao 音色（GPT-SoVITS V5turbo）
 
-本仓库主用 **V5turbo**（`s2Gv5turbo.pth` + `vocoder.pth`，T2S 共用 `s1v3.ckpt`）。
-V3 权重与配置条目保留作回退；V1、V2、V2Pro、V4 的配置项已从
-`GPT_SoVITS/configs/tts_infer.yaml` 移除，避免误选到不存在的权重。
+本仓库只用 **V5turbo**（`s2Gv5turbo.pth` + `vocoder.pth`，T2S 共用 `s1v3.ckpt`）。
+不保留 V3 回退；V1、V2、V2Pro、V3、V4 的配置条目已从
+`GPT_SoVITS/configs/tts_infer.yaml` 移除，V3 的 `s2Gv3.pth` 与 BigVGAN 声码器
+也已从仓库删除，避免误选到不存在的权重。
 
 ## 文件
 
 - `GPT_SoVITS/pretrained_models/s1v3.ckpt` — T2S 权重（Git LFS）
-- `GPT_SoVITS/pretrained_models/gsv-v5-pretrained/s2Gv5turbo.pth`、`vocoder.pth` — V5turbo 主用权重（Git LFS）
-- `GPT_SoVITS/pretrained_models/s2Gv3.pth` — V3 回退权重（Git LFS）
+- `GPT_SoVITS/pretrained_models/gsv-v5-pretrained/s2Gv5turbo.pth`、`vocoder.pth` — V5turbo 权重（Git LFS）
 - `voices/dabao/ref_dabao3-1.wav` — 参考音频，9.15 秒，44.1 kHz 立体声
 - `voices/dabao/ref_dabao3-1.txt` — 参考音频逐字稿
 - `voices/dabao/preset.json` — **唯一权威**：合成参数 + 91 条全局发音修正 + 第 3/4/5 幕专项修正
@@ -37,14 +37,14 @@ A/B 试听 + 回读。CPU 上单段 4 步推理约 12 秒（不含首次模型�
 成片流水线；当前的 `tts_server.py` 只应用采样参数、发音修正和 MP3 编码，
 不做这些后期处理，输出保持 V5 声码器原生的 48 kHz。
 
-`tts_infer.yaml` 保留 `custom`（V5turbo）、`v3` 回退块和 `v5turbo` 块。服务启动时
+`tts_infer.yaml` 只保留 `custom`（V5turbo）和 `v5turbo` 块，不再有 V3 回退。服务启动时
 从 `custom` 块读取版本与权重路径；GPT-SoVITS 载入权重时默认会把内置的全版本配置
 回写该文件，`tts_server.py` 已禁用回写，保证仓库配置不被运行时改写。
 
 ## 安装（另一台 Windows 电脑）
 
 1. 安装 Python 3.11（64 位）。
-2. 拉取 LFS 权重（仓库 LFS 合计约 4.1 GB）：
+2. 拉取 LFS 权重（仓库 LFS 合计约 2.9 GB）：
    ```powershell
    git lfs install
    git lfs pull
