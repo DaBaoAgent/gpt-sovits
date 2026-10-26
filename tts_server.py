@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""本地 OpenAI 形状 TTS 服务：把 GPT-SoVITS v3 的 dabao 音色包成 POST /v1/audio/speech。
+"""本地 OpenAI 形状 TTS 服务：把 GPT-SoVITS 的 dabao 音色包成 POST /v1/audio/speech。
 
 - 音色、采样参数与发音纠错统一从 voices/dabao/preset.json 读取。
+- 底模版本与权重路径从 preset 指定的 tts_infer.yaml 的 custom 块读取。
 - 只加载一次模型，进程内循环服务（CPU 稳态约 1x 实时）。
 - 用 pythonw.exe 启动 → 不弹命令行窗口。
 - 输出 MP3（编解码交给自带 runtime/ffmpeg.exe，CREATE_NO_WINDOW 不闪窗）。
@@ -14,6 +15,8 @@ import threading
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import yaml
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 os.chdir(ROOT)
@@ -36,7 +39,7 @@ _ref = VOICE["ref_audio_path"]
 REF = _ref if os.path.isabs(_ref) else os.path.join(ROOT, _ref)
 PROMPT = (VOICE.get("prompt_text") or "").strip()
 VOICE_NAME = VOICE.get("id", "dabao")
-MODEL = SYNTH.get("model", "gpt-sovits-v3")
+MODEL = SYNTH.get("model", "gpt-sovits-v5turbo")
 
 if not os.path.isfile(REF):
     raise SystemExit("缺少参考音频：" + REF)
@@ -75,19 +78,29 @@ if not hasattr(torchaudio, "_sf_load_patched"):
 
 from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config  # noqa: E402
 
-# GPT-SoVITS 载入权重时会把内置的全版本默认配置回写 tts_infer.yaml，
-# 会重新塞进 V1/V2/V4/V5 条目。本仓库只用 V3，参数由下面的 CFG 固定，
-# 因此禁用回写，保持 configs/tts_infer.yaml 的 V3-only 内容。
+# GPT-SoVITS 载入权重时会把内置的全版本默认配置回写 tts_infer.yaml。
+# 底模版本与权重统一由该文件的 custom 块决定，这里禁用回写，避免运行期改写配置。
 TTS_Config.save_configs = lambda self, configs_path=None: None
 
-PM = "GPT_SoVITS/pretrained_models"
-CFG = {"custom": {
-    "device": "cpu", "is_half": False, "version": "v3",
-    "t2s_weights_path": f"{PM}/s1v3.ckpt",
-    "vits_weights_path": f"{PM}/s2Gv3.pth",
-    "cnhuhbert_base_path": f"{PM}/chinese-hubert-base",
-    "bert_base_path": f"{PM}/chinese-roberta-wwm-ext-large",
-}}
+_infer = PRESET.get("server", {}).get("infer_config", "GPT_SoVITS/configs/tts_infer.yaml")
+CONFIG_PATH = _infer if os.path.isabs(_infer) else os.path.join(ROOT, _infer)
+with open(CONFIG_PATH, encoding="utf-8") as f:
+    CUSTOM_CFG = (yaml.safe_load(f) or {}).get("custom") or {}
+if not CUSTOM_CFG.get("version") or not CUSTOM_CFG.get("vits_weights_path"):
+    raise SystemExit("tts_infer.yaml 的 custom 块缺少 version / vits_weights_path：" + CONFIG_PATH)
+CFG = {"custom": CUSTOM_CFG}
+VERSION = CUSTOM_CFG["version"]
+
+for _key in ("t2s_weights_path", "vits_weights_path"):
+    _p = CUSTOM_CFG.get(_key, "")
+    _p = _p if os.path.isabs(_p) else os.path.join(ROOT, _p)
+    if not os.path.isfile(_p) or os.path.getsize(_p) < 100000:
+        raise SystemExit("权重缺失或不完整（可能未拉取 Git LFS）：" + _p)
+if VERSION in ("v5dev", "v5turbo"):
+    _voc = os.path.join(ROOT, "GPT_SoVITS", "pretrained_models",
+                        "gsv-v5-pretrained", "vocoder.pth")
+    if not os.path.isfile(_voc) or os.path.getsize(_voc) < 100000:
+        raise SystemExit("V5 声码器缺失或不完整（可能未拉取 Git LFS）：" + _voc)
 
 
 def log(msg):
@@ -183,6 +196,8 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": True,
                 "voice": VOICE_NAME,
                 "model": MODEL,
+                "version": VERSION,
+                "weights": CUSTOM_CFG["vits_weights_path"],
                 "ref": os.path.relpath(REF, ROOT),
                 "params": LOCKED,
                 "split": DEFAULT_SPLIT,

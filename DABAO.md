@@ -1,45 +1,50 @@
-# dabao 音色（GPT-SoVITS V3）
+# dabao 音色（GPT-SoVITS V5turbo）
 
-本仓库只使用 **V3** 权重与配置（`s1v3.ckpt` / `s2Gv3.pth`）。V1、V2、V2Pro、
-V4、V5 的配置项已从 `GPT_SoVITS/configs/tts_infer.yaml` 移除，避免误选到不存在的权重。
+本仓库主用 **V5turbo**（`s2Gv5turbo.pth` + `vocoder.pth`，T2S 共用 `s1v3.ckpt`）。
+V3 权重与配置条目保留作回退；V1、V2、V2Pro、V4 的配置项已从
+`GPT_SoVITS/configs/tts_infer.yaml` 移除，避免误选到不存在的权重。
 
 ## 文件
 
-- `GPT_SoVITS/pretrained_models/s1v3.ckpt`、`s2Gv3.pth` — V3 权重（Git LFS）
+- `GPT_SoVITS/pretrained_models/s1v3.ckpt` — T2S 权重（Git LFS）
+- `GPT_SoVITS/pretrained_models/gsv-v5-pretrained/s2Gv5turbo.pth`、`vocoder.pth` — V5turbo 主用权重（Git LFS）
+- `GPT_SoVITS/pretrained_models/s2Gv3.pth` — V3 回退权重（Git LFS）
 - `voices/dabao/ref_dabao3-1.wav` — 参考音频，9.15 秒，44.1 kHz 立体声
 - `voices/dabao/ref_dabao3-1.txt` — 参考音频逐字稿
-- `voices/dabao/preset.json` — **唯一权威**：合成参数 + 89 条全局发音修正 + 第 3/4/5 幕专项修正
+- `voices/dabao/preset.json` — **唯一权威**：合成参数 + 91 条全局发音修正 + 第 3/4/5 幕专项修正
 - `voices/dabao/读音规范.md` — 文言多音字与古地名读音说明
-- `tts_server.py` — OpenAI 形状的 HTTP 服务，读取上面的 `preset.json`
+- `tts_server.py` — OpenAI 形状的 HTTP 服务，读取 `preset.json` 与 `tts_infer.yaml` 的 custom 块
 - `start-tts-server.vbs` — 静默启动 `127.0.0.1:9880`
 
 ## 当前参数
 
 | 项 | 值 |
 | --- | --- |
-| 模型 | GPT-SoVITS V3 |
+| 模型 | GPT-SoVITS V5turbo（4 steps / cfg 0） |
 | 切分 | `cut1` |
 | 语速 | `speed_factor = 1.0` |
 | 采样 | `temperature = 0.8`，`top_p = 0.9`，`top_k = 20`，`repetition_penalty = 1.3` |
 | 种子 | `-1`（每次随机） |
 | 片段 | `fragment_interval = 0.3`，`batch_size = 1` |
-| 输出 | MP3 24 kHz 单声道（`mp3_bitrate` 请求 192k，24 kHz 下 LAME 上限 160k） |
+| 输出 | MP3 48 kHz 单声道（`mp3_bitrate = 192k`） |
 
-这些值来自 2026-10-24 的本机 V3 音色审核；改音色请改 `preset.json`，不要改
-`tts_server.py`。
+采样参数沿用 2026-10-24 的 V3 审核结论，2026-10-26 在 V5turbo 上用同一段文本做
+A/B 试听与回读后确认沿用。换底模后不要直接套用其他版本的调参结论，改参数要做
+A/B 试听 + 回读。CPU 上单段 4 步推理约 12 秒（不含首次模型载入）；改音色请改
+`preset.json`，不要改 `tts_server.py`。
 
 `preset.json` 里的 `postprocess`（句间停顿、噪声门、44.1 kHz 重采样等）保留给
 成片流水线；当前的 `tts_server.py` 只应用采样参数、发音修正和 MP3 编码，
-不做这些后期处理，输出保持 V3 声码器原生的 24 kHz。
+不做这些后期处理，输出保持 V5 声码器原生的 48 kHz。
 
-`tts_infer.yaml` 只保留 `custom` 与 `v3` 两块。GPT-SoVITS 载入权重时默认会把
-内置的全版本配置回写该文件，`tts_server.py` 已禁用回写，保证仓库里的 V3-only
-配置不会被运行时重新塞进 V1/V2/V4/V5 条目。
+`tts_infer.yaml` 保留 `custom`（V5turbo）、`v3` 回退块和 `v5turbo` 块。服务启动时
+从 `custom` 块读取版本与权重路径；GPT-SoVITS 载入权重时默认会把内置的全版本配置
+回写该文件，`tts_server.py` 已禁用回写，保证仓库配置不被运行时改写。
 
 ## 安装（另一台 Windows 电脑）
 
 1. 安装 Python 3.11（64 位）。
-2. 拉取 LFS 权重：
+2. 拉取 LFS 权重（仓库 LFS 合计约 4.1 GB）：
    ```powershell
    git lfs install
    git lfs pull
