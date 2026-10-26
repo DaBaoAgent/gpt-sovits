@@ -5,7 +5,7 @@
 - 底模版本与权重路径从 preset 指定的 tts_infer.yaml 的 custom 块读取。
 - 只加载一次模型，进程内循环服务（CPU 稳态约 1x 实时）。
 - 用 pythonw.exe 启动 → 不弹命令行窗口。
-- 输出 MP3（编解码交给自带 runtime/ffmpeg.exe，CREATE_NO_WINDOW 不闪窗）。
+- 输出 MP3（优先用自带 runtime/ffmpeg.exe，否则用 PATH 上的 ffmpeg，不闪窗）。
 """
 import json
 import os
@@ -57,10 +57,31 @@ LOCK_KEYS = (
 LOCKED = {k: SYNTH[k] for k in LOCK_KEYS if k in SYNTH}
 DEFAULT_SPLIT = os.environ.get("TTS_SPLIT") or SYNTH.get("text_split_method", "cut1")
 
-_ff = PRESET.get("ffmpeg", "runtime/ffmpeg.exe")
-FFMPEG = _ff if os.path.isabs(_ff) else os.path.join(ROOT, _ff)
-if not os.path.isfile(FFMPEG) or os.path.getsize(FFMPEG) < 100000:
-    FFMPEG = "ffmpeg"
+def _find_ffmpeg():
+    """返回可用的 ffmpeg 绝对路径；LFS 指针文件（<100KB）不算可用。
+
+    引擎导入时会把 runtime/ 加进 PATH，若其中只是 LFS 指针，
+    直接按名字调用会解析到指针文件而启动失败，所以这里固化绝对路径。
+    """
+    bundled = PRESET.get("ffmpeg", "runtime/ffmpeg.exe")
+    bundled = bundled if os.path.isabs(bundled) else os.path.join(ROOT, bundled)
+    if os.path.isfile(bundled) and os.path.getsize(bundled) >= 100_000:
+        return bundled
+    names = ("ffmpeg.exe",) if os.name == "nt" else ("ffmpeg",)
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        d = d.strip('"')
+        if not d:
+            continue
+        for name in names:
+            p = os.path.join(d, name)
+            if os.path.isfile(p) and os.path.getsize(p) >= 100_000:
+                return os.path.abspath(p)
+    return None
+
+
+FFMPEG = _find_ffmpeg()
+if not FFMPEG:
+    raise SystemExit("未找到可用的 ffmpeg：runtime/ffmpeg.exe 缺失或为 LFS 指针，PATH 上也没有可用版本。")
 MP3_BITRATE = POST.get("mp3_bitrate", "192k")
 LOG = os.path.join(ROOT, "tts_server.log")
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
@@ -128,7 +149,7 @@ def to_mp3(pcm, sr):
     p = subprocess.run(cmd, input=raw, stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE, creationflags=NO_WINDOW)
     if p.returncode != 0:
-        raise RuntimeError("ffmpeg 失败: " + p.stderr.decode("utf-8", "replace"))
+        raise RuntimeError("ffmpeg 失败（%s）: %s" % (FFMPEG, p.stderr.decode("utf-8", "replace")))
     return p.stdout
 
 
