@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""本地 OpenAI 形状 TTS 服务：把 GPT-SoVITS v3 包成 POST /v1/audio/speech。
+"""本地 OpenAI 形状 TTS 服务：把 GPT-SoVITS v3 的 dabao 音色包成 POST /v1/audio/speech。
 
-- 音色参数**定死**为一轮轮试听收敛出来的「26E」组合（见下 LOCKED）。
+- 音色、采样参数与发音纠错统一从 voices/dabao/preset.json 读取。
 - 只加载一次模型，进程内循环服务（CPU 稳态约 1x 实时）。
 - 用 pythonw.exe 启动 → 不弹命令行窗口。
 - 输出 MP3（编解码交给自带 runtime/ffmpeg.exe，CREATE_NO_WINDOW 不闪窗）。
@@ -21,6 +21,46 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "GPT_SoVITS"))
 os.environ.setdefault("G2PW", "0")
 
+PRESET_PATH = os.path.join(ROOT, "voices", "dabao", "preset.json")
+with open(PRESET_PATH, encoding="utf-8") as f:
+    PRESET = json.load(f)
+
+VOICE = PRESET["voice"]
+SYNTH = PRESET["synthesis"]
+POST = PRESET.get("postprocess", {})
+SPEAK_FIXES = PRESET.get("speak_fixes", {})
+GLOBAL_FIXES = list(SPEAK_FIXES.get("global", []))
+ACT_FIXES = SPEAK_FIXES.get("acts", {})
+
+_ref = VOICE["ref_audio_path"]
+REF = _ref if os.path.isabs(_ref) else os.path.join(ROOT, _ref)
+PROMPT = (VOICE.get("prompt_text") or "").strip()
+VOICE_NAME = VOICE.get("id", "dabao")
+MODEL = SYNTH.get("model", "gpt-sovits-v3")
+
+if not os.path.isfile(REF):
+    raise SystemExit("缺少参考音频：" + REF)
+if os.path.getsize(REF) < 100000:
+    raise SystemExit("参考音频不是有效文件（可能未拉取 Git LFS）：" + REF)
+if not PROMPT:
+    raise SystemExit("preset.json 缺少 voice.prompt_text")
+
+# 这些参数锁死在 preset.json，改这里无效；改音色请改 preset。
+LOCK_KEYS = (
+    "speed_factor", "repetition_penalty", "top_k", "top_p",
+    "temperature", "seed", "fragment_interval", "batch_size",
+)
+LOCKED = {k: SYNTH[k] for k in LOCK_KEYS if k in SYNTH}
+DEFAULT_SPLIT = os.environ.get("TTS_SPLIT") or SYNTH.get("text_split_method", "cut1")
+
+_ff = PRESET.get("ffmpeg", "runtime/ffmpeg.exe")
+FFMPEG = _ff if os.path.isabs(_ff) else os.path.join(ROOT, _ff)
+if not os.path.isfile(FFMPEG) or os.path.getsize(FFMPEG) < 100000:
+    FFMPEG = "ffmpeg"
+MP3_BITRATE = POST.get("mp3_bitrate", "192k")
+LOG = os.path.join(ROOT, "tts_server.log")
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
+
 import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
 import torch  # noqa: E402
@@ -35,32 +75,10 @@ if not hasattr(torchaudio, "_sf_load_patched"):
 
 from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config  # noqa: E402
 
-# ---------------------------------------------------------------- 锁定参数
-# 宝哥 2026-10-07 拍板：26E = 参考 ref_dabao3-1.wav / 温 0.8 / top_k 15 /
-# seed 666 / 语速 1.0 / 重复惩罚 1.35。改这里 = 改全片音色，勿轻动。
-REF = "ref_dabao3-1.wav"
-PROMPT = ("希特勒在巴法利亚阿尔卑斯山的乡间别墅策划了他最大胆的行动，准备迎接最大挑战。"
-          "罗马尼亚、保加利亚和匈牙利是德国的坚定盟友。")
-LOCKED = {
-    "speed_factor": 1.00,
-    "repetition_penalty": 1.35,
-    "top_k": 15,
-    "top_p": 0.95,
-    "temperature": 0.80,
-    "seed": 666,
-}
-# 切句方式（宝哥 2026-10-07 二次定版）：cut1=凑四句一切（现默认）。
-# ⚠ cut0=整段不切曾为默认，但对长文本（>110 字）会把末句合成成**不可识别音频**——
-#   实测 46 幕里有 6 幕（7/10/15/20/36/42）末句/中间句被判「听不出」，字幕对时全挂；
-#   单独合成同一末句却清晰。故改为 cut1：切段更短，末句正常，听感与 cut0 几乎一样
-#   （第32幕停顿 13 vs 11）。cut2=凑50字一切；cut3=按句号切；cut5=按每个标点切（旧旧默认，
-#   听感「一段一段」，宝哥嫌碎）。
-# 可用环境变量 TTS_SPLIT 或请求体 text_split_method 覆盖。
-DEFAULT_SPLIT = os.environ.get("TTS_SPLIT", "cut1")
-
-FFMPEG = os.path.join(ROOT, "runtime", "ffmpeg.exe")
-LOG = os.path.join(ROOT, "tts_server.log")
-NO_WINDOW = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
+# GPT-SoVITS 载入权重时会把内置的全版本默认配置回写 tts_infer.yaml，
+# 会重新塞进 V1/V2/V4/V5 条目。本仓库只用 V3，参数由下面的 CFG 固定，
+# 因此禁用回写，保持 configs/tts_infer.yaml 的 V3-only 内容。
+TTS_Config.save_configs = lambda self, configs_path=None: None
 
 PM = "GPT_SoVITS/pretrained_models"
 CFG = {"custom": {
@@ -81,12 +99,18 @@ def log(msg):
         pass
 
 
+def apply_speak_fixes(text, fixes):
+    for old, new in sorted(fixes, key=lambda p: len(p[0]), reverse=True):
+        text = text.replace(old, new)
+    return text
+
+
 def to_mp3(pcm, sr):
     """int16 numpy -> MP3 bytes（走 ffmpeg 管道，不落临时文件）。"""
     raw = np.ascontiguousarray(pcm.astype(np.int16)).tobytes()
     cmd = [FFMPEG, "-hide_banner", "-loglevel", "error",
            "-f", "s16le", "-ar", str(int(sr)), "-ac", "1", "-i", "pipe:0",
-           "-codec:a", "libmp3lame", "-b:a", "128k", "-f", "mp3", "pipe:1"]
+           "-codec:a", "libmp3lame", "-b:a", MP3_BITRATE, "-f", "mp3", "pipe:1"]
     p = subprocess.run(cmd, input=raw, stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE, creationflags=NO_WINDOW)
     if p.returncode != 0:
@@ -107,12 +131,20 @@ def get_tts():
     return _tts
 
 
-def synth(text, speed=None, split=None):
+def synth(text, speed=None, split=None, act=None):
+    fixes = list(GLOBAL_FIXES)
+    if act is not None:
+        fixes.extend(ACT_FIXES.get(str(act), []))
+    spoken = apply_speak_fixes(text, fixes) if fixes else text
+
     tts = get_tts()
     req = {
-        "text": text, "text_lang": "zh",
-        "ref_audio_path": os.path.join(ROOT, REF), "prompt_text": PROMPT, "prompt_lang": "zh",
-        "text_split_method": split or DEFAULT_SPLIT, "batch_size": 1,
+        "text": spoken,
+        "text_lang": VOICE.get("text_lang", "zh"),
+        "ref_audio_path": REF,
+        "prompt_text": PROMPT,
+        "prompt_lang": VOICE.get("prompt_lang", "zh"),
+        "text_split_method": split or DEFAULT_SPLIT,
         "media_type": "wav", "streaming_mode": False,
         "parallel_infer": False, "use_cuda_graph": False, "split_bucket": False,
         **LOCKED,
@@ -127,7 +159,7 @@ def synth(text, speed=None, split=None):
                 break
     if pcm is None:
         raise RuntimeError("TTS 没有返回音频")
-    return sr, pcm
+    return sr, pcm, spoken
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -147,8 +179,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path in ("/health", "/healthz"):
-            self._json(200, {"ok": True, "voice": "gpt-sovits-26E", "locked": LOCKED,
-                             "split": DEFAULT_SPLIT})
+            self._json(200, {
+                "ok": True,
+                "voice": VOICE_NAME,
+                "model": MODEL,
+                "ref": os.path.relpath(REF, ROOT),
+                "params": LOCKED,
+                "split": DEFAULT_SPLIT,
+                "fixes_global": len(GLOBAL_FIXES),
+                "fixes_acts": sorted(ACT_FIXES),
+                "mp3_bitrate": MP3_BITRATE,
+            })
         else:
             self._json(404, {"error": "not found"})
 
@@ -170,17 +211,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         speed = body.get("speed") or body.get("speed_factor")
         split = body.get("text_split_method")
+        act = body.get("act")
 
         t0 = time.time()
         try:
-            sr, pcm = synth(text, speed, split)
+            sr, pcm, spoken = synth(text, speed, split, act)
             mp3 = to_mp3(pcm, sr)
         except Exception as e:
             log("合成失败: %s\n%s" % (e, traceback.format_exc()))
             self._json(500, {"error": str(e)})
             return
-        log("合成 %d 字 -> %.1fs / %.1fs 用时 %.1fs" % (
-            len(text), len(pcm) / float(sr), time.time() - t0, time.time() - t0))
+        log("合成 %d 字 -> %.1fs / %.1fs 用时 %.1fs | act=%s" % (
+            len(text), len(pcm) / float(sr), time.time() - t0, time.time() - t0, act))
+        if spoken != text:
+            log("朗读文本: " + spoken)
         self.send_response(200)
         self.send_header("Content-Type", "audio/mpeg")
         self.send_header("Content-Length", str(len(mp3)))
@@ -189,12 +233,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def warmup():
-    """丢弃式预热：GPT-SoVITS 在本进程的**第 1 次**合成与之后的结果不同
-    （实测同一个 seed：第 1 次 20.80s，第 2 次起稳定 19.36s）。
-    宝哥拍板的 26E 是稳态那一版 → 必须先跑一次丢掉的合成，让真实请求落在稳态。"""
+    """丢弃式预热：GPT-SoVITS 在本进程的第 1 次合成与之后的结果不同，
+    先跑一次丢掉的合成，让真实请求落在稳态。"""
     text = "预热。"
     try:
-        sr, pcm = synth(text)
+        sr, pcm, _ = synth(text)
         log("预热完成 %.2fs（丢弃）" % (len(pcm) / float(sr)))
     except Exception as e:
         log("预热失败: %s" % e)
