@@ -914,7 +914,9 @@ class TTS:
                 ref_wav_path, 16000, self.configs.device, mono=True,
                 dtype=torch.float32, match_librosa=True,
             )
-            if wav16k.shape[-1] > 160000 or wav16k.shape[-1] < 48000:
+            # 本地改动（manju 项目）：上限由 10s 放宽到 12s，以容纳
+            # 「诸葛亮-垂暮」11.44s 的参考音频；其余音色仍在 3~10s 内。
+            if wav16k.shape[-1] > 192000 or wav16k.shape[-1] < 48000:
                 raise OSError(i18n("参考音频在3~10秒范围外，请更换！"))
             zero_wav_torch = torch.from_numpy(zero_wav)
             wav16k = wav16k.squeeze(0)
