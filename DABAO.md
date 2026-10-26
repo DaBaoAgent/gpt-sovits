@@ -23,13 +23,18 @@ V4、V5 的配置项已从 `GPT_SoVITS/configs/tts_infer.yaml` 移除，避免�
 | 采样 | `temperature = 0.8`，`top_p = 0.9`，`top_k = 20`，`repetition_penalty = 1.3` |
 | 种子 | `-1`（每次随机） |
 | 片段 | `fragment_interval = 0.3`，`batch_size = 1` |
-| 输出 | MP3 192 kbps，44.1 kHz 单声道（服务端编码） |
+| 输出 | MP3 24 kHz 单声道（`mp3_bitrate` 请求 192k，24 kHz 下 LAME 上限 160k） |
 
 这些值来自 2026-10-24 的本机 V3 音色审核；改音色请改 `preset.json`，不要改
 `tts_server.py`。
 
-`preset.json` 里的 `postprocess`（句间停顿、噪声门等）保留给成片流水线；
-当前的 `tts_server.py` 只应用采样参数、发音修正和 MP3 编码，不做这些后期处理。
+`preset.json` 里的 `postprocess`（句间停顿、噪声门、44.1 kHz 重采样等）保留给
+成片流水线；当前的 `tts_server.py` 只应用采样参数、发音修正和 MP3 编码，
+不做这些后期处理，输出保持 V3 声码器原生的 24 kHz。
+
+`tts_infer.yaml` 只保留 `custom` 与 `v3` 两块。GPT-SoVITS 载入权重时默认会把
+内置的全版本配置回写该文件，`tts_server.py` 已禁用回写，保证仓库里的 V3-only
+配置不会被运行时重新塞进 V1/V2/V4/V5 条目。
 
 ## 安装（另一台 Windows 电脑）
 
@@ -58,11 +63,14 @@ V4、V5 的配置项已从 `GPT_SoVITS/configs/tts_infer.yaml` 移除，避免�
 ## 合成
 
 ```powershell
-curl -X POST http://127.0.0.1:9880/v1/audio/speech `
-  -H "Content-Type: application/json" `
-  -d '{"input":"建安十三年，刘琮不战而降。","act":3}' `
-  --output out.mp3
+$body = '{"input":"建安十三年，刘琮不战而降。","act":3}'
+Invoke-WebRequest -Uri http://127.0.0.1:9880/v1/audio/speech `
+  -Method Post -ContentType "application/json; charset=utf-8" `
+  -Body ([Text.Encoding]::UTF8.GetBytes($body)) -OutFile out.mp3
 ```
+
+注意：不要用 PowerShell 的 `curl` 别名直接传中文 JSON（会按 ANSI 编码，
+服务端报 `bad json`），也不要直接把中文当命令行参数传给 `curl.exe`。
 
 - `input` / `text`：要朗读的原文。
 - `speed` / `speed_factor`：可选，覆盖 `speed_factor`。
