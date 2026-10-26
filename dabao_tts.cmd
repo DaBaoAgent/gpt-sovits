@@ -1,8 +1,14 @@
 @echo off
-REM dabao_tts.cmd - 快捷入口：用引擎目录里的 .venv 跑 dabao_tts.py
-REM 用法: dabao_tts.cmd --text-file <全篇.txt> --out <配音.wav> --force
+REM dabao_tts.cmd - run dabao_tts.py with the engine venv
+REM Usage: dabao_tts.cmd --text-file path\to\full.txt --out path\to\voice.wav --force
 setlocal
+set "PYTHONPATH="
+set "PYTHONHOME="
 set "HERE=%~dp0"
 set "PY=%HERE%.venv\Scripts\python.exe"
-if not exist "%PY%" set "PY=python"
+if not exist "%PY%" (
+  echo [fail] Engine venv not found: %HERE%.venv
+  echo        Run scripts\setup.ps1 from the project root first.
+  exit /b 1
+)
 "%PY%" -X utf8 "%HERE%dabao_tts.py" %*

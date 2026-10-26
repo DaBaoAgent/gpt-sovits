@@ -4,6 +4,8 @@
 #   pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
 # 然后 pip install -r requirements-win-cpu.txt（已装好的 2.6.0+cpu 视为满足）。
 # 版本与 2026-10-26 生产环境 pip freeze 对齐，numpy 2.x 已验证可用。
+# jieba_fast 无 Python 3.11 Windows 轮子，故意不列入；setup.ps1 会安装
+# compat/jieba_fast 兼容垫片（转发到纯 Python 的 jieba）。
 torch==2.6.0
 torchaudio==2.6.0
 

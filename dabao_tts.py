@@ -48,10 +48,12 @@ def resolve_path(p: str | os.PathLike) -> Path:
 
 
 def resolve_tool(p: str | os.PathLike, name: str) -> str:
-    """配置里的相对路径存在就用它，否则回退到 PATH 上的同名命令。"""
+    """配置里的相对路径存在且不是 LFS 指针时用它，否则回退到 PATH 上的同名命令。"""
     candidate = resolve_path(p)
-    if candidate.exists():
+    if candidate.is_file() and candidate.stat().st_size >= 100_000:
         return str(candidate)
+    if candidate.is_file():
+        print(f"警告：{candidate} 疑似 LFS 指针文件，改用 PATH 上的 {name}", flush=True)
     return name
 
 
@@ -214,6 +216,8 @@ def ensure_server(cfg: dict, base_url: str, env: dict) -> subprocess.Popen | Non
     port = cfg["server"]["port"]
     cmd = [str(python), str(api), str(port)]
     popen_env = os.environ.copy()
+    popen_env.pop("PYTHONPATH", None)
+    popen_env.pop("PYTHONHOME", None)
     popen_env["PYTHONUTF8"] = "1"
     if env.get("preset"):
         popen_env["TTS_PRESET"] = env["preset"]
