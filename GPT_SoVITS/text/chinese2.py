@@ -23,6 +23,9 @@ import logging
 jieba_fast.setLogLevel(logging.CRITICAL)
 import jieba_fast.posseg as psg
 
+# 历史专有名词：让 jieba 把"靖难"当一个词，配合 polyphonic-fix.rep 里的 nan4 规则
+jieba_fast.add_word("靖难")
+
 # is_g2pw_str = os.environ.get("is_g2pw", "True")##默认开启
 # is_g2pw = False#True if is_g2pw_str.lower() == 'true' else False
 is_g2pw = True  # True if is_g2pw_str.lower() == 'true' else False
